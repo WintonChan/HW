@@ -1,0 +1,193 @@
+图13 删除备份集
+7	对目标数据库的增量备份
+增量备份包括差异增量备份和累积增量备份。差异增量备份，指备份上一次同级或低级差异增量备份以来所有发生变化的数据库，差异备份是RMAN生成的增量备份的默认类型；累积增量备份，指备份上次0级备份以来所有发生变化的数据库。Oracle 11g仅支持0级增量备份和1级增量备份，本文仅探讨差异增量备份。
+7.1	准备工作
+目标机B机上创建备份文件存储的目录（B机上的操作）：
+su - oracle
+cd /opt/oracle
+mkdir backups
+目标机B机的Oracle数据库需设置为归档模式（归档模式的检查）：
+su - oracle
+sqlplus / as sysdba
+archive log list;
+rman命令程序路径已包含在PATH环境变量中（B机上的操作）：
+su - oracle
+echo $PATH
+检查/opt/oracle/db/product/11.1.0/bin路径是否在PATH环境变量中。
+目标机B机可连接到目录机A机目录库（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms;
+查看块更改跟踪文件（B机上的操作）：
+su - oracle
+sqlplus / as sysdba
+select * from v$block_change_tracking;
+如果显示DISABLED，那么证明未启用块更改跟踪文件。
+配置块更改跟踪文件（B机上的操作）：
+su - oracle
+sqlplus / as sysdba
+alter database enable block change tracking using file '/opt/oracle/blocktrackfile.fil';
+再次查看更改跟踪文件（B机上的操作）：
+su - oracle
+sqlplus / as sysdba
+select * from v$block_change_tracking;
+如下图所示：
+ 
+图14 查看块更改跟踪文件
+块更改跟踪文件非常重要，它记录了数据块的更改状态。如果没有该文件的生效，那么1级增量备份将会与0级增量备份一样耗费时间和磁盘空间。
+7.2	全库增量备份
+全库增量备份，必须先进行0级增量备份，再进行1级增量备份，并可以进行若干次1级增量备份，1级增量备份的数据量要远小于0级备份。对于full类型的完全备份，可以作为0级全库增量备份对待，1级全库增量备份也可以基于full类型完全备份的时间点之后数据块的改变进行备份。
+7.2.1	0级全库增量备份
+0级增量备份是增量基本备份，是1级增量备份的基础。0级全库备份主要完成参数文件、控制文件、数据文件和归档日志文件的备份。
+目标机B机使用rman连接目录机A机（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+执行0级全库备份命令：
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 0
+format '/opt/oracle/backups/full_level0_t%t_s%s_p%p'
+database
+plus archivelog delete all input;
+release channel ch_n1;
+}
+ 
+图15 执行0级全库增量备份
+7.2.2	1级全库增量备份
+1级全库增量备份，如果前一次全库增量备份是0级增量备份，那么本次1级备份就备份0级备份以来发生改变的数据块；如果前一次全库增量备份是1级增量备份，那么本次1级备份就备份前一次1级备份以来发生改变的数据块。如果前一次备份是full类型的完全备份，那么1级增量备份也会基于该完全备份点以来的数据块变化进行备份。
+目标机B机使用rman连接目录机A机（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+执行1级全库备份命令：
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 1
+format '/opt/oracle/backups/full_level1_t%t_s%s_p%p'
+database
+plus archivelog delete all input;
+release channel ch_n1;
+}
+查看备份生成的文件，可以发现1级增量备份生成的文件要小得多，如图所示：
+ 
+图16 1级增量备份生成的文件
+
+7.3	表空间增量备份
+表空间增量备份与全库增量备份类似，也需要先进行0级表空间增量备份，然后再进行1级表空间增量备份。需要注意的是，如果前面一次备份是完全备份、0级全库增量备份或1级全库增量备份，那么表空间1级增量备份也可以基于该次备份时间点以来的数据块的变化进行备份。如果要备份的表空间只包含一个数据文件，而该数据文件之前已进行过数据文件的0级备份或1级备份，那么表空间的1级增量备份也可以基于该时间点以来数据块的变化进行备份。
+表空间0级增量备份操作（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 0
+format '/opt/oracle/backups/tablespace_level0_t%t_s%s_p%p'
+tablespace hptc_ts;
+release channel ch_n1;
+}
+表空间1级增量备份操作（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 1
+format '/opt/oracle/backups/tablespace_level1_t%t_s%s_p%p'
+tablespace hptc_ts;
+release channel ch_n1;
+}
+7.4	数据文件增量备份
+数据文件0级增量备份操作（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 0
+format '/opt/oracle/backups/datafile_level0_t%t_s%s_p%p'
+datafile '/opt/oracle/db/oradata/hpcppdb/hptc.dbf';
+release channel ch_n1;
+}
+数据文件1级增量备份操作（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+allocate channel ch_n1 type disk;
+backup
+incremental level 1
+format '/opt/oracle/backups/datafile_level1_t%t_s%s_p%p'
+datafile '/opt/oracle/db/oradata/hpcppdb/hptc.dbf';
+release channel ch_n1;
+}
+8	对目标机数据库的恢复
+8.1	准备工作
+检查备份文件存放路径：
+su - oracle
+cd /opt/oracle/backups
+ll
+查看该路径下是否有相应的备份文件。
+8.2	表空间的恢复
+实现对目标机数据库指定表空间的恢复。
+将目标机指定数据文件备份下来。
+登录rman（目标机B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+执行备份数据文件命令：
+run{
+allocate channel ch1 type disk;
+sql "alter tablespace hptc_ts offline immediate";
+restore tablespace hptc_ts;
+recover tablespace hptc_ts;
+sql "alter tablespace hptc_ts online";
+release channel ch1;
+}
+该命令实现hptc_ts表空间的恢复。
+8.3	恢复数据文件
+恢复指定数据文件。
+首先查看目标机拥有的数据文件和对应的表空间（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+report schema;
+如下图所示：
+ 
+图17 查看目标机的数据文件
+可以看到数据文件hptc_ts.dbf的编号为5，那么恢复该数据文件。
+执行数据文件前，需将目标机B机数据库启动为mount模式（B机上的操作）：
+su - oracle
+sqlplus / as sysdba
+shutdown immediate
+startup mount
+执行恢复命令（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+allocate channel ch1 type disk;
+restore datafile 5;
+recover database;
+sql "alter database open";
+release channel ch1;
+}
+该命令实现了数据文件hptc_ts.dbf的恢复。
+8.4	完全恢复
+执行脚本前，需将目标机B机数据库启动为mount模式（B机上的操作）：
+su - oracle
+sqlplus / as sysdba
+shutdown immediate
+startup mount
+创建完全恢复脚本（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+create script fulldbrestore_file{
+allocate channel ch1 type disk;
+restore database;
+recover database;
+sql "alter database open";
+release channel ch1;
+}
+执行完全恢复脚本（B机上的操作）：
+su - oracle
+rman target / catalog rman/rman@iptvtms
+run{
+execute script fulldbrestore_file;
+}
+脚本实现了目标机Oracle数据库的完全恢复。
