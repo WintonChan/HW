@@ -1,0 +1,64 @@
+#!/bin/sh
+
+#$1 cli; $2 OEM user; $3 OEM user password; $4 database; $5 dbcred; $6 hostcred; $7 jobname; $8 backtime; $9 freq; $10 begin_time; $11 interval; $12 timezone;
+
+cli=$1
+if [ $8 = NOW ];
+then
+	backtime=
+else
+	backtime="set until time \"to_date('$8','yyyymmdd hh24:mi:ss')\";"
+fi
+
+$cli logout
+
+#$cli login -username='sysman' -password='Huawei123' >> /dev/null 
+$cli login -username=${2} -password=${3} >> /dev/null
+if [ $? -ne 0 ];
+then
+   echo "Error : login failure."
+   exit 1
+fi
+
+echo "create job property_file"
+cat>/tmp/recoverprop.txt<<EOF
+name=$7
+type=RMANScript
+owner=SYSMAN
+target_list=$4:oracle_database
+cred.defaultDBCred.<all_targets>:oracle_database=NAMED:SYSMAN:$5
+cred.defaultHostCred.<all_targets>:oracle_database=NAMED:SYSMAN:$6
+variable.rman_perl_script=<<MULTILINEVALUE
+shutdown immediate;
+startup mount;
+run {
+#set until time "to_date('20130705 10:09:53','yyyymmdd hh24:mi:ss')";
+$backtime
+allocate channel c1 type disk;
+restore database;
+recover database;
+release channel c1;
+}
+sql "alter database open resetlogs";
+MULTILINEVALUE
+schedule.frequency=${9}
+schedule.startTime=${10}
+schedule.interval=${11}
+schedule.timezone.region=${12}
+EOF
+
+echo "$cli create_job -name=$7 -type=RMANScript -input_file=property_file:/tmp/recoverprop.txt"
+$cli create_job -name=$7 -type=RMANScript -input_file=property_file:/tmp/recoverprop.txt
+if [ $? -ne 0 ]; 
+then
+   echo "Error : run RecoverScript failure."
+   $cli logout >> /dev/null
+   exit 1
+fi
+
+$cli logout >> /dev/null
+if [ $? -ne 0 ];
+then
+   echo "Error : logout failure."
+   exit 1
+fi
